@@ -1,0 +1,23 @@
+name: streamlit-env
+channels:
+  - pytorch
+  - conda-forge
+  - defaults
+dependencies:
+  - python=3.9
+  - streamlit
+  - pytorch
+  - torchvision
+  - numpy
+  - matplotlib
+  - seaborn
+  - scikit-image
+  - scipy
+  - pillow
+  - opencv
+  - pip
+  - pip:
+    - timm
+    - lime
+    - pytorch-grad-cam
+    - huggingface-hub
