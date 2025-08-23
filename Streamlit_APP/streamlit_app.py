@@ -24,6 +24,7 @@ import threading
 import gc
 import hashlib
 from scipy import ndimage
+from huggingface_hub import hf_hub_download
 
 warnings.filterwarnings("ignore")
 logging.basicConfig(level=logging.INFO)
@@ -67,42 +68,48 @@ DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 MODEL_CONFIGS = {
     "Custom CNN": {
-        "path": "../kaggle_saved_model/custom_cnn_best.pth",
+        "repo_id": "fahimShahriarOvi/CSE366_Project_Weights",
+        "filename": "custom_cnn_best.pth",
         "architecture": "Custom Convolutional Neural Network",
         "input_size": (224, 224),
         "classes": NUM_CLASSES,
         "description": "5-layer CNN with BatchNorm and Dropout",
     },
     "ConvNeXt-Tiny": {
-        "path": "../kaggle_saved_model/convnext_tiny_best.pth",
+        "repo_id": "fahimShahriarOvi/CSE366_Project_Weights",
+        "filename": "convnext_tiny_best.pth",
         "architecture": "ConvNeXt-Tiny",
         "input_size": (224, 224),
         "classes": NUM_CLASSES,
         "description": "Modern CNN inspired by Vision Transformers",
     },
     "DenseNet-121": {
-        "path": "../kaggle_saved_model/densenet121_best.pth",
+        "repo_id": "fahimShahriarOvi/CSE366_Project_Weights",
+        "filename": "densenet121_best.pth",
         "architecture": "DenseNet-121",
         "input_size": (224, 224),
         "classes": NUM_CLASSES,
         "description": "Densely connected convolutional network",
     },
     "EfficientNet-B0": {
-        "path": "../kaggle_saved_model/efficientnet_b0_best.pth",
+        "repo_id": "fahimShahriarOvi/CSE366_Project_Weights",
+        "filename": "efficientnet_b0_best.pth",
         "architecture": "EfficientNet-B0",
         "input_size": (224, 224),
         "classes": NUM_CLASSES,
         "description": "Compound scaling method for CNN efficiency",
     },
     "Inception-V3": {
-        "path": "../kaggle_saved_model/inception_v3_best.pth",
+        "repo_id": "fahimShahriarOvi/CSE366_Project_Weights",
+        "filename": "inception_v3_best.pth",
         "architecture": "Inception-V3",
         "input_size": (299, 299),
         "classes": NUM_CLASSES,
         "description": "Multi-scale convolutional architecture",
     },
     "ViT-Base-16": {
-        "path": "../kaggle_saved_model/vit_base_(b_16)_best.pth",
+        "repo_id": "fahimShahriarOvi/CSE366_Project_Weights",
+        "filename": "vit_base_(b_16)_best.pth",
         "architecture": "Vision Transformer Base Patch 16",
         "input_size": (224, 224),
         "classes": NUM_CLASSES,
@@ -159,6 +166,18 @@ class CustomCNN(nn.Module):
         x = self.features(x)
         x = self.classifier(x)
         return x
+
+
+@st.cache_data
+def download_model_from_hub(repo_id, filename):
+    try:
+        with st.spinner(f"Downloading {filename} from Hugging Face Hub..."):
+            model_path = hf_hub_download(repo_id=repo_id, filename=filename)
+        logger.info(f"Successfully downloaded {filename} from {repo_id}")
+        return model_path
+    except Exception as e:
+        logger.error(f"Error downloading {filename} from {repo_id}: {str(e)}")
+        raise e
 
 
 def load_model(model_name, model_path, num_classes, device):
@@ -241,6 +260,10 @@ def load_model(model_name, model_path, num_classes, device):
             model = timm.create_model(
                 "vit_base_patch16_224", pretrained=False, num_classes=num_classes
             )
+            if "head.1.weight" in state_dict:
+                model.head = nn.Sequential(
+                    nn.Dropout(0.5), nn.Linear(model.head.in_features, num_classes)
+                )
             model = model.to(device)
 
         else:
@@ -313,10 +336,16 @@ def check_model_availability():
     missing_models = {}
 
     for model_name, config in MODEL_CONFIGS.items():
-        if os.path.exists(config["path"]):
+        try:
+            from huggingface_hub import repo_exists
+
+            if repo_exists(config["repo_id"]):
+                available_models[model_name] = config
+            else:
+                missing_models[model_name] = config
+        except Exception as e:
             available_models[model_name] = config
-        else:
-            missing_models[model_name] = config
+            logger.warning(f"Could not verify {model_name} availability: {str(e)}")
 
     return available_models, missing_models
 
@@ -409,7 +438,8 @@ if selected_model:
     <p><strong>Input Size:</strong> {config['input_size']}</p>
     <p><strong>Classes:</strong> {config['classes']}</p>
     <p><strong>Description:</strong> {config['description']}</p>
-    <p><strong>Checkpoint:</strong> <code>{config['path']}</code></p>
+    <p><strong>Repository:</strong> <code>{config['repo_id']}</code></p>
+    <p><strong>File:</strong> <code>{config['filename']}</code></p>
     </div>
     """,
         unsafe_allow_html=True,
@@ -468,7 +498,8 @@ else:
 @st.cache_resource
 def load_selected_model(model_name):
     config = available_models[model_name]
-    return load_model(model_name, config["path"], NUM_CLASSES, DEVICE)
+    model_path = download_model_from_hub(config["repo_id"], config["filename"])
+    return load_model(model_name, model_path, NUM_CLASSES, DEVICE)
 
 
 def predict_image(image_pil, model, model_name):
@@ -488,75 +519,29 @@ def predict_image(image_pil, model, model_name):
 
 
 def generate_vit_attention_visualization(model, tensor, orig_img_np, processing_id):
-    """Generate attention visualization for Vision Transformer models with stop check"""
     try:
         if check_should_stop() or st.session_state.processing_id != processing_id:
             return None
 
+        print("Attempting gradient-based ViT visualization...")
+
         model.eval()
+        tensor.requires_grad_(True)
 
-        attention_weights = []
+        output = model(tensor)
+        if isinstance(output, tuple):
+            output = output[0]
+        predicted_class = output.argmax().item()
 
-        def attention_hook(module, input, output):
-            if check_should_stop() or st.session_state.processing_id != processing_id:
-                return
-            if hasattr(module, "num_heads"):
-                attn = output[1]
-                attention_weights.append(attn)
+        model.zero_grad()
+        output[0, predicted_class].backward()
 
-        if hasattr(model, "blocks"):
-            last_attention = model.blocks[-1].attn
-            hook = last_attention.register_forward_hook(attention_hook)
-        else:
-            hook = None
-            for name, module in model.named_modules():
-                if "attn" in name and "drop" not in name:
-                    hook = module.register_forward_hook(attention_hook)
+        gradients = tensor.grad.cpu().numpy()[0]
 
-        if check_should_stop() or st.session_state.processing_id != processing_id:
-            if hook:
-                hook.remove()
-            return None
+        grad_magnitude = np.abs(gradients).sum(axis=0)
 
-        with torch.no_grad():
-            _ = model(tensor)
-
-        if hook:
-            hook.remove()
-
-        if check_should_stop() or st.session_state.processing_id != processing_id:
-            return None
-
-        if not attention_weights:
-            raise ValueError("Could not capture attention weights")
-
-        attn = attention_weights[-1]
-        attn = attn.cpu().numpy()[0]
-
-        if check_should_stop() or st.session_state.processing_id != processing_id:
-            return None
-
-        attn_avg = np.mean(attn, axis=0)
-
-        patch_size = 16
-        num_patches = int(np.sqrt(attn_avg.shape[1] - 1))
-
-        cls_attention = attn_avg[0, 1:]
-
-        attention_map = cls_attention.reshape(num_patches, num_patches)
-
-        if check_should_stop() or st.session_state.processing_id != processing_id:
-            return None
-
-        from scipy import ndimage
-
-        attention_resized = ndimage.zoom(
-            attention_map,
-            (orig_img_np.shape[0] / num_patches, orig_img_np.shape[1] / num_patches),
-        )
-
-        attention_resized = (attention_resized - attention_resized.min()) / (
-            attention_resized.max() - attention_resized.min()
+        grad_magnitude = (grad_magnitude - grad_magnitude.min()) / (
+            grad_magnitude.max() - grad_magnitude.min()
         )
 
         if check_should_stop() or st.session_state.processing_id != processing_id:
@@ -564,13 +549,9 @@ def generate_vit_attention_visualization(model, tensor, orig_img_np, processing_
 
         if show_heatmap_only:
             plt.figure(figsize=(6, 6))
-            plt.imshow(attention_resized, cmap=colormap)
+            plt.imshow(grad_magnitude, cmap=colormap)
             plt.axis("off")
-            plt.title("ViT Attention Map")
-
-            if check_should_stop() or st.session_state.processing_id != processing_id:
-                plt.close()
-                return None
+            plt.title("ViT Gradient Visualization")
 
             buf = io.BytesIO()
             plt.savefig(buf, format="png", bbox_inches="tight", pad_inches=0)
@@ -589,27 +570,20 @@ def generate_vit_attention_visualization(model, tensor, orig_img_np, processing_
             }
             cv_colormap = colormap_mapping.get(colormap, cv2.COLORMAP_JET)
 
-            attention_8bit = (attention_resized * 255).astype(np.uint8)
-
-            attention_colored = cv2.applyColorMap(attention_8bit, cv_colormap)
-            attention_colored = cv2.cvtColor(attention_colored, cv2.COLOR_BGR2RGB)
-            attention_colored = attention_colored.astype(np.float32) / 255.0
-
-            if check_should_stop() or st.session_state.processing_id != processing_id:
-                return None
+            grad_8bit = (grad_magnitude * 255).astype(np.uint8)
+            grad_colored = cv2.applyColorMap(grad_8bit, cv_colormap)
+            grad_colored = cv2.cvtColor(grad_colored, cv2.COLOR_BGR2RGB)
+            grad_colored = grad_colored.astype(np.float32) / 255.0
 
             blended = (
-                orig_img_np * (1 - explanation_alpha)
-                + attention_colored * explanation_alpha
+                orig_img_np * (1 - explanation_alpha) + grad_colored * explanation_alpha
             )
             blended = np.clip(blended, 0, 1)
 
             return (blended * 255).astype(np.uint8)
 
     except Exception as e:
-        logger.error(f"Error generating ViT attention visualization: {str(e)}")
-        if not (check_should_stop() or st.session_state.processing_id != processing_id):
-            st.warning(f"Could not generate ViT attention visualization: {str(e)}")
+        logger.error(f"Error generating ViT visualization: {str(e)}")
         return None
 
 
@@ -743,6 +717,7 @@ def generate_lime_explanation(model, model_name, orig_img_np, processing_id):
 
             model.eval()
             batch_tensors = []
+
             for img in images:
                 if (
                     check_should_stop()
@@ -750,7 +725,11 @@ def generate_lime_explanation(model, model_name, orig_img_np, processing_id):
                 ):
                     return np.zeros((len(images), NUM_CLASSES))
 
-                img_uint8 = (img * 255).astype(np.uint8)
+                if img.max() <= 1.0:
+                    img_uint8 = (img * 255).astype(np.uint8)
+                else:
+                    img_uint8 = img.astype(np.uint8)
+
                 pil_img = Image.fromarray(img_uint8)
                 tensor = transform(pil_img)
                 batch_tensors.append(tensor)
@@ -758,26 +737,52 @@ def generate_lime_explanation(model, model_name, orig_img_np, processing_id):
             if check_should_stop() or st.session_state.processing_id != processing_id:
                 return np.zeros((len(images), NUM_CLASSES))
 
+            if not batch_tensors:
+                return np.zeros((1, NUM_CLASSES))
+
             batch = torch.stack(batch_tensors).to(DEVICE)
+
             with torch.no_grad():
-                logits = model(batch)
-            return torch.softmax(logits, dim=1).cpu().numpy()
+                try:
+                    logits = model(batch)
+                    if isinstance(logits, tuple):
+                        logits = logits[0]
+                    probs = torch.softmax(logits, dim=1).cpu().numpy()
+                    return probs
+                except Exception as e:
+                    print(f"Error in batch prediction: {e}")
+                    return np.zeros((len(images), NUM_CLASSES))
 
         if check_should_stop() or st.session_state.processing_id != processing_id:
             return None
 
         explainer = lime_image.LimeImageExplainer()
+
         explanation = explainer.explain_instance(
-            orig_img_np, batch_predict, top_labels=1, hide_color=0, num_samples=100
+            orig_img_np,
+            batch_predict,
+            top_labels=1,
+            hide_color=0,
+            num_samples=50,
+            random_seed=42,
         )
 
         if check_should_stop() or st.session_state.processing_id != processing_id:
             return None
 
-        img_uint8 = (orig_img_np * 255).astype(np.uint8)
+        img_uint8 = (
+            (orig_img_np * 255).astype(np.uint8)
+            if orig_img_np.max() <= 1.0
+            else orig_img_np.astype(np.uint8)
+        )
         pil_img = Image.fromarray(img_uint8)
         tensor = transform(pil_img).unsqueeze(0).to(DEVICE)
-        pred_class = model(tensor).argmax().item()
+
+        with torch.no_grad():
+            pred_output = model(tensor)
+            if isinstance(pred_output, tuple):
+                pred_output = pred_output[0]
+            pred_class = pred_output.argmax().item()
 
         if check_should_stop() or st.session_state.processing_id != processing_id:
             return None
@@ -803,6 +808,7 @@ def generate_lime_explanation(model, model_name, orig_img_np, processing_id):
 
     except Exception as e:
         logger.error(f"Error generating LIME: {str(e)}")
+        print(f"LIME error details: {e}")
         if st.session_state.processing_id == processing_id:
             st.warning(f"Could not generate LIME explanation: {str(e)}")
         return None
