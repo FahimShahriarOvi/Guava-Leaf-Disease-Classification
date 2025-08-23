@@ -1,6 +1,7 @@
 .venv/**
 augmented_data/**
 data/**
+extra/**
 *.pyc
 kaggle_saved_model/**
 __pycache__/**
