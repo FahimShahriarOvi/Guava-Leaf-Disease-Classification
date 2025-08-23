@@ -31,7 +31,6 @@ logger = logging.getLogger(__name__)
 
 
 def initialize_session_state():
-    """Initialize session state variables for processing control"""
     if "processing_id" not in st.session_state:
         st.session_state.processing_id = None
     if "current_image_hash" not in st.session_state:
@@ -43,7 +42,6 @@ def initialize_session_state():
 
 
 def get_image_hash(image_pil, model_name, methods):
-    """Generate a unique hash for the current processing task"""
     img_bytes = io.BytesIO()
     image_pil.save(img_bytes, format="PNG")
     img_data = img_bytes.getvalue()
@@ -53,7 +51,6 @@ def get_image_hash(image_pil, model_name, methods):
 
 
 def clear_processing_memory():
-    """Clear GPU/CPU memory and matplotlib figures"""
     plt.close("all")
     if torch.cuda.is_available():
         torch.cuda.empty_cache()
@@ -61,11 +58,8 @@ def clear_processing_memory():
 
 
 def check_should_stop():
-    """Check if current processing should be stopped"""
     return st.session_state.stop_processing.is_set()
 
-
-initialize_session_state()
 
 CLASS_NAMES = ["Anthracnose", "Canker", "Dot", "Healthy", "Rust"]
 NUM_CLASSES = len(CLASS_NAMES)
@@ -107,7 +101,6 @@ MODEL_CONFIGS = {
         "classes": NUM_CLASSES,
         "description": "Multi-scale convolutional architecture",
     },
-    # New ViT model configuration
     "ViT-Base-16": {
         "path": "../kaggle_saved_model/vit_base_(b_16)_best.pth",
         "architecture": "Vision Transformer Base Patch 16",
@@ -244,7 +237,6 @@ def load_model(model_name, model_path, num_classes, device):
 
             model = model.to(device)
 
-        # ViT model loading
         elif model_name == "ViT-Base-16":
             model = timm.create_model(
                 "vit_base_patch16_224", pretrained=False, num_classes=num_classes
@@ -287,7 +279,6 @@ def get_target_layers(model, model_name):
             else:
                 return [model.avgpool]
 
-        # ViT target layers - use the last attention block's norm layer
         elif model_name == "ViT-Base-16":
             if hasattr(model, "blocks"):
                 return [model.blocks[-1].norm1]
@@ -441,7 +432,6 @@ sample_choice = st.sidebar.selectbox(
 
 st.sidebar.subheader("Explanation Methods")
 
-# Check if ViT is selected and adjust available methods accordingly
 if selected_model == "ViT-Base-16":
     available_methods = ["Attention Visualization", "LIME"]
     default_methods = ["Attention Visualization", "LIME"]
@@ -505,23 +495,19 @@ def generate_vit_attention_visualization(model, tensor, orig_img_np, processing_
 
         model.eval()
 
-        # Hook to capture attention weights from the last attention block
         attention_weights = []
 
         def attention_hook(module, input, output):
             if check_should_stop() or st.session_state.processing_id != processing_id:
                 return
-            # For ViT, the attention output is typically (batch_size, num_heads, seq_len, seq_len)
             if hasattr(module, "num_heads"):
-                attn = output[1]  # attention weights are usually the second output
+                attn = output[1]
                 attention_weights.append(attn)
 
-        # Register hook on the last attention layer
         if hasattr(model, "blocks"):
             last_attention = model.blocks[-1].attn
             hook = last_attention.register_forward_hook(attention_hook)
         else:
-            # Fallback for different ViT implementations
             hook = None
             for name, module in model.named_modules():
                 if "attn" in name and "drop" not in name:
@@ -532,7 +518,6 @@ def generate_vit_attention_visualization(model, tensor, orig_img_np, processing_
                 hook.remove()
             return None
 
-        # Forward pass to get attention weights
         with torch.no_grad():
             _ = model(tensor)
 
@@ -545,32 +530,24 @@ def generate_vit_attention_visualization(model, tensor, orig_img_np, processing_
         if not attention_weights:
             raise ValueError("Could not capture attention weights")
 
-        # Process attention weights
-        attn = attention_weights[-1]  # Use the last captured attention
-        attn = attn.cpu().numpy()[0]  # Remove batch dimension
+        attn = attention_weights[-1]
+        attn = attn.cpu().numpy()[0]
 
         if check_should_stop() or st.session_state.processing_id != processing_id:
             return None
 
-        # Average across attention heads
         attn_avg = np.mean(attn, axis=0)
 
-        # Remove CLS token (first token) and reshape to spatial dimensions
-        patch_size = 16  # For ViT-Base/16
-        num_patches = int(np.sqrt(attn_avg.shape[1] - 1))  # -1 for CLS token
+        patch_size = 16
+        num_patches = int(np.sqrt(attn_avg.shape[1] - 1))
 
-        # Get attention from CLS token to all patches
-        cls_attention = attn_avg[
-            0, 1:
-        ]  # CLS token attention to patches (excluding CLS itself)
+        cls_attention = attn_avg[0, 1:]
 
-        # Reshape to spatial dimensions
         attention_map = cls_attention.reshape(num_patches, num_patches)
 
         if check_should_stop() or st.session_state.processing_id != processing_id:
             return None
 
-        # Resize to match input image size
         from scipy import ndimage
 
         attention_resized = ndimage.zoom(
@@ -578,7 +555,6 @@ def generate_vit_attention_visualization(model, tensor, orig_img_np, processing_
             (orig_img_np.shape[0] / num_patches, orig_img_np.shape[1] / num_patches),
         )
 
-        # Normalize attention map
         attention_resized = (attention_resized - attention_resized.min()) / (
             attention_resized.max() - attention_resized.min()
         )
@@ -603,7 +579,6 @@ def generate_vit_attention_visualization(model, tensor, orig_img_np, processing_
             plt.close()
             return img_array
         else:
-            # Overlay attention on original image
             import cv2
 
             colormap_mapping = {
@@ -614,10 +589,8 @@ def generate_vit_attention_visualization(model, tensor, orig_img_np, processing_
             }
             cv_colormap = colormap_mapping.get(colormap, cv2.COLORMAP_JET)
 
-            # Convert attention to 8-bit
             attention_8bit = (attention_resized * 255).astype(np.uint8)
 
-            # Apply colormap
             attention_colored = cv2.applyColorMap(attention_8bit, cv_colormap)
             attention_colored = cv2.cvtColor(attention_colored, cv2.COLOR_BGR2RGB)
             attention_colored = attention_colored.astype(np.float32) / 255.0
@@ -625,7 +598,6 @@ def generate_vit_attention_visualization(model, tensor, orig_img_np, processing_
             if check_should_stop() or st.session_state.processing_id != processing_id:
                 return None
 
-            # Blend with original image
             blended = (
                 orig_img_np * (1 - explanation_alpha)
                 + attention_colored * explanation_alpha
@@ -646,7 +618,6 @@ def generate_cam_explanations(
 ):
     results = {}
 
-    # Skip CAM methods for ViT models as they don't work well
     if model_name == "ViT-Base-16":
         if "Attention Visualization" in methods:
             attention_result = generate_vit_attention_visualization(
@@ -760,7 +731,6 @@ def generate_cam_explanations(
 
 
 def generate_lime_explanation(model, model_name, orig_img_np, processing_id):
-    """Generate LIME explanation with stop check (FR-4)"""
     try:
         if check_should_stop() or st.session_state.processing_id != processing_id:
             return None
@@ -838,10 +808,8 @@ def generate_lime_explanation(model, model_name, orig_img_np, processing_id):
         return None
 
 
-# Initialize session state
 initialize_session_state()
 
-# Determine input image
 input_image = None
 image_source = "None"
 
@@ -856,22 +824,17 @@ elif sample_choice != "None":
     else:
         st.warning(f"Sample image not found: {sample_path}")
 
-# Check if we have a new image/model combination
 if input_image is not None:
     new_image_hash = get_image_hash(input_image, selected_model, selected_methods)
 
-    # If this is a new processing task, stop previous work and clear memory
     if st.session_state.current_image_hash != new_image_hash:
-        # Stop previous processing
         st.session_state.stop_processing.set()
 
-        # Clear memory
         clear_processing_memory()
 
-        # Update to new processing task
         st.session_state.current_image_hash = new_image_hash
         st.session_state.processing_id = new_image_hash
-        st.session_state.stop_processing.clear()  # Reset the stop event
+        st.session_state.stop_processing.clear()
 
 if input_image is not None:
     try:
@@ -909,7 +872,6 @@ if input_image is not None:
 
             st.subheader("Top-3 Predictions")
 
-            # Create metrics columns
             metric_cols = st.columns(3)
             for i, idx in enumerate(top_idxs):
                 with metric_cols[i]:
@@ -1038,7 +1000,6 @@ Top-3 Results:
                         )
                         z.writestr("prediction_summary.txt", summary)
 
-                        # Add explanation images
                         for name, image in all_results.items():
                             if image.dtype != np.uint8:
                                 img_array = (image * 255).astype(np.uint8)
