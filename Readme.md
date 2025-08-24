@@ -8,10 +8,13 @@ Efficientnet B0 Link: https://www.kaggle.com/code/fahimshahriar2003/cse366-proje
 Inception V3 Link: https://www.kaggle.com/code/fahimshahriarovi/cse366-project-inception-v3  
 ViT_Base (B/16) Link: https://www.kaggle.com/code/fahimshahriarovi/cse366-project-vit-base-b16  
 
-# Google Drive
+# Model Weights
 
-Link: https://drive.google.com/drive/folders/1McvxJk4Aa_OjST2sUYIZlL9xcjNhBUb_?usp=sharing
+Link: https://huggingface.co/fahimShahriarOvi/CSE366_Project_Weights/tree/main
 
 # Github Repositories
 
 Link: https://github.com/FahimShahriarOvi/Guava-Leaf-Disease-Classification
+
+# Report
+Link: https://www.overleaf.com/read/nmvjjgjzdbzv#1134ae
